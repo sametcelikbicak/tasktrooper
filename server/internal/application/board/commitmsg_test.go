@@ -49,7 +49,7 @@ func TestWriteCommitMessageRewritesIntoEnglishAndStampsTheAgent(t *testing.T) {
 	})
 
 	assert.Equal(t,
-		"PI-3 feat(web): add the android app link\n\nDrop the wishlist section from the landing page.\n\nAgent: Frontend Developer\n",
+		"feat(web): add the android app link\n\nDrop the wishlist section from the landing page.\n\nTask: PI-3\nCo-authored-by: Frontend Developer <frontend-developer@agents.tasktrooper.ai>\n",
 		msg)
 
 	require.Len(t, llm.seen.Messages, 2)
@@ -67,7 +67,7 @@ func TestWriteCommitMessageFallsBackToTheOriginalOnError(t *testing.T) {
 		AgentName: "Backend Developer",
 	})
 
-	assert.Equal(t, "PI-3 Bir şeyi düzelt\n\nDüzeltildi.\n\nAgent: Backend Developer\n", msg)
+	assert.Equal(t, "Bir şeyi düzelt\n\nDüzeltildi.\n\nTask: PI-3\nCo-authored-by: Backend Developer <backend-developer@agents.tasktrooper.ai>\n", msg)
 }
 
 func TestWriteCommitMessageWithoutLLMKeepsTheOriginal(t *testing.T) {
@@ -76,7 +76,7 @@ func TestWriteCommitMessageWithoutLLMKeepsTheOriginal(t *testing.T) {
 		AgentName: "Backend Developer",
 	})
 
-	assert.Equal(t, "Fix the deploy target lookup\n\nAgent: Backend Developer\n", msg)
+	assert.Equal(t, "Fix the deploy target lookup\n\nCo-authored-by: Backend Developer <backend-developer@agents.tasktrooper.ai>\n", msg)
 }
 
 func TestWriteCommitMessageKeepsThePrefix(t *testing.T) {
@@ -99,7 +99,8 @@ func TestWriteCommitMessageKeepsThePrefixWithTaskKey(t *testing.T) {
 		Prefix:  "wip: ",
 	})
 
-	assert.True(t, strings.HasPrefix(msg, "wip: T-9 feat(api): add the delete endpoint"), msg)
+	assert.True(t, strings.HasPrefix(msg, "wip: feat(api): add the delete endpoint"), msg)
+	assert.Contains(t, msg, "Task: T-9")
 }
 
 func TestWriteCommitMessageCapsMaxTokens(t *testing.T) {
@@ -114,30 +115,41 @@ func TestWriteCommitMessageCapsMaxTokens(t *testing.T) {
 	assert.Equal(t, commitMessageMaxTokens, llm.seen.MaxTokens)
 }
 
-func TestPrefixSubjectWithTaskKeyTruncatesWithinBudget(t *testing.T) {
-	long := "feat(board): " + strings.Repeat("x", 200)
-
-	got := prefixSubjectWithTaskKey(long, "T-1")
-
-	assert.LessOrEqual(t, len(got), commitSubjectMaxChars)
-	assert.True(t, strings.HasPrefix(got, "T-1 feat(board): "), got)
-}
-
-func TestPrefixSubjectWithTaskKeyOnlyTouchesTheSubjectLine(t *testing.T) {
-	body := "feat(web): add the link\n\nDrop the wishlist section.\n\nAgent: Frontend Developer\n"
-
-	got := prefixSubjectWithTaskKey(body, "PI-3")
-
+func TestCommitTrailersCombinesTaskAndAgent(t *testing.T) {
 	assert.Equal(t,
-		"PI-3 feat(web): add the link\n\nDrop the wishlist section.\n\nAgent: Frontend Developer\n",
-		got)
+		"\n\nTask: PI-3\nCo-authored-by: Frontend Developer <frontend-developer@agents.tasktrooper.ai>\n",
+		commitTrailers("PI-3", "Frontend Developer"))
 }
 
-func TestPrefixSubjectWithTaskKeyLeavesTheBodyUntouchedWithoutAKey(t *testing.T) {
-	body := "feat(web): add the link"
+func TestCommitTrailersOmitsWhicheverIsMissing(t *testing.T) {
+	assert.Equal(t, "\n\nTask: T-1\n", commitTrailers("T-1", ""))
+	assert.Equal(t,
+		"\n\nCo-authored-by: Backend Developer <backend-developer@agents.tasktrooper.ai>\n",
+		commitTrailers("", "Backend Developer"))
+	assert.Equal(t, "", commitTrailers("", ""))
+}
 
-	assert.Equal(t, body, prefixSubjectWithTaskKey(body, ""))
-	assert.Equal(t, "", prefixSubjectWithTaskKey("", "T-1"))
+// A commit-message policy that only recognises standard git trailers (which
+// "Agent: <name>" was not) still has to accept this one, since Co-authored-by
+// is exactly that — and it is not optional: it is the one place per-agent
+// performance tracking can still tell which agent wrote a commit once it has
+// landed.
+func TestCommitTrailersUsesCoAuthoredByNotABespokeAgentLine(t *testing.T) {
+	trailer := commitTrailers("", "QA Reviewer")
+	assert.Contains(t, trailer, "Co-authored-by: QA Reviewer <qa-reviewer@agents.tasktrooper.ai>")
+	assert.NotContains(t, trailer, "Agent:")
+}
+
+func TestWriteCommitMessageLeavesTheSubjectAsConventionalCommits(t *testing.T) {
+	llm := &commitLLM{reply: "feat(web): add the link"}
+
+	msg := writeCommitMessage(context.Background(), llm, commitDetails{
+		TaskKey: "T-32",
+		Title:   "add the link",
+	})
+
+	assert.True(t, strings.HasPrefix(msg, "feat(web): add the link"), msg)
+	assert.Contains(t, msg, "Task: T-32")
 }
 
 func TestSanitizeCommitMessage(t *testing.T) {

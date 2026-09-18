@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { statSync, accessSync, constants, existsSync } from "node:fs";
+import { statSync, accessSync, constants, existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
@@ -121,11 +121,33 @@ function searchDirs(): { dir: string; source: PreflightSource }[] {
   out.push({ dir: path.join(home, ".local", "bin"), source: "home" });
   out.push({ dir: path.join(home, ".claude", "local"), source: "home" });
   out.push({ dir: path.join(home, ".bun", "bin"), source: "home" });
+  out.push({ dir: path.join(home, ".opencode", "bin"), source: "home" });
   // npm's global prefix. `npm prefix -g` would be authoritative but costs a
   // node startup per call; these are the three locations it actually uses.
   if (process.platform === "darwin") out.push({ dir: "/opt/homebrew/lib/node_modules/.bin", source: "npm-prefix" });
   out.push({ dir: path.join(home, ".npm-global", "bin"), source: "npm-prefix" });
-  out.push({ dir: path.join(home, ".nvm", "versions"), source: "npm-prefix" });
+  // nvm installs node under ~/.nvm/versions/node/<version>/bin. The static
+  // path ~/.nvm/versions does not contain binaries, so `which()` would never
+  // find them there. Use NVM_BIN if set (the active version), and also glob
+  // every installed version's bin/ so a binary installed under a non-active
+  // node is still found.
+  if (process.platform !== "win32") {
+    const nvmBin = process.env.NVM_BIN;
+    if (nvmBin && !out.some((e) => e.dir === nvmBin)) {
+      out.push({ dir: nvmBin, source: "npm-prefix" });
+    }
+    const nvmVersionsDir = path.join(home, ".nvm", "versions", "node");
+    if (existsSync(nvmVersionsDir)) {
+      try {
+        for (const entry of readdirSync(nvmVersionsDir)) {
+          const binDir = path.join(nvmVersionsDir, entry, "bin");
+          if (existsSync(binDir) && !out.some((e) => e.dir === binDir)) {
+            out.push({ dir: binDir, source: "npm-prefix" });
+          }
+        }
+      } catch { /* ignore unreadable dirs */ }
+    }
+  }
   return out;
 }
 
@@ -776,7 +798,7 @@ const probeCursorAgent = (): Promise<PreflightItem> =>
   probeSimpleCLI("cursor-agent", "Cursor CLI", "cursor-agent", "curl https://cursor.com/install -fsS | bash");
 
 const probeOpencode = (): Promise<PreflightItem> =>
-  probeSimpleCLI("opencode", "OpenCode CLI", "opencode", "npm install -g opencode-ai");
+  probeSimpleCLI("opencode", "OpenCode CLI", "opencode", "curl -fsSL https://opencode.ai/install | bash");
 
 // --- optional: chrome and the Xcode command line tools ----------------------
 
